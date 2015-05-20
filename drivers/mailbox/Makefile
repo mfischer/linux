@@ -11,3 +11,5 @@ obj-$(CONFIG_OMAP2PLUS_MBOX)	+= omap-mailbox.o
 obj-$(CONFIG_PCC)		+= pcc.o
 
 obj-$(CONFIG_ALTERA_MBOX)	+= mailbox-altera.o
+
+obj-$(CONFIG_XILINX_MBOX)	+= mailbox-xilinx.o
