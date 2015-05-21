@@ -1,0 +1,44 @@
+Xilinx Mailbox Driver
+=====================
+
+Required properties:
+- compatible       : "xlnx,mailbox-2.1".
+- reg              :  physical base address of the mailbox and length of
+                      memory mapped region.
+- #mbox-cells      :  common mailbox binding property to identify the number
+                      of cells required for the mailbox specifier, should be 1
+- clocks           :  phandle to clock provider
+- clock-names      :  must be 'mbox'
+
+Optional properties:
+- interrupt-parent : interrupt source phandle
+- interrupts       : interrupt number, The interrupt specifier format
+                     depends on the interrupt controller parent.
+
+Example:
+	mbox: mailbox@40400000 {
+		compatible = "xlnx,mailbox-2.1";
+		reg = <0x40400000 0x100>;
+		interrupt-parent = <&intc>;
+		interrupts = <5>;
+		#mbox-cells = <0>;
+		clocks = <&clkc 15>;
+		clock-names = "mbox";
+	};
+
+Mailbox client
+===============
+"mboxes" and the optional "mbox-names" (please see
+Documentation/devicetree/bindings/mailbox/mailbox.txt for details). Each value
+of the mboxes property should contain a phandle to the mailbox controller
+device node and second argument is the channel index. It must be 0 (hardware
+support only one channel). The equivalent "mbox-names" property value can be
+used to give a name to the communication channel to be used by the client user.
+
+Example:
+	mclient0: mclient0@400 {
+		compatible = "client-1.0";
+		reg = <0x400 0x10>;
+		mbox-names = "mbox";
+		mboxes = <&mbox 0>;
+	};
