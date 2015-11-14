@@ -184,7 +184,7 @@ static int zynq_fpga_ops_write_init(struct fpga_manager *mgr, u32 flags,
 
 	priv = mgr->priv;
 
-	err = clk_enable(priv->clk);
+	err = pm_runtime_get_sync(priv->dev);
 	if (err)
 		return err;
 
@@ -271,12 +271,12 @@ static int zynq_fpga_ops_write_init(struct fpga_manager *mgr, u32 flags,
 	ctrl = zynq_fpga_read(priv, MCTRL_OFFSET);
 	zynq_fpga_write(priv, MCTRL_OFFSET, (~MCTRL_PCAP_LPBK_MASK & ctrl));
 
-	clk_disable(priv->clk);
+	pm_runtime_put(&priv->dev);
 
 	return 0;
 
 out_err:
-	clk_disable(priv->clk);
+	pm_runtime_put(&priv->dev);
 
 	return err;
 }
@@ -301,8 +301,7 @@ static int zynq_fpga_ops_write(struct fpga_manager *mgr,
 
 	memcpy(kbuf, buf, count);
 
-	/* enable clock */
-	err = clk_enable(priv->clk);
+	err = pm_runtime_get_sync(priv->dev);
 	if (err)
 		goto out_free;
 
@@ -335,7 +334,7 @@ static int zynq_fpga_ops_write(struct fpga_manager *mgr,
 		err = -EFAULT;
 	}
 
-	clk_disable(priv->clk);
+	pm_runtime_put(priv->dev);
 
 out_free:
 	dma_free_coherent(priv->dev, in_count, kbuf, dma_addr);
@@ -349,7 +348,7 @@ static int zynq_fpga_ops_write_complete(struct fpga_manager *mgr, u32 flags)
 	int err;
 	u32 intr_status;
 
-	err = clk_enable(priv->clk);
+	err = pm_runtime_get_sync(&pdev->dev);
 	if (err)
 		return err;
 
@@ -358,7 +357,7 @@ static int zynq_fpga_ops_write_complete(struct fpga_manager *mgr, u32 flags)
 				     INIT_POLL_DELAY,
 				     INIT_POLL_TIMEOUT);
 
-	clk_disable(priv->clk);
+	pm_runtime_put(&pdev->dev);
 
 	if (err)
 		return err;
@@ -385,12 +384,12 @@ static enum fpga_mgr_states zynq_fpga_ops_state(struct fpga_manager *mgr)
 
 	priv = mgr->priv;
 
-	err = clk_enable(priv->clk);
+	err = pm_runtime_get_sync(priv->dev);
 	if (err)
 		return FPGA_MGR_STATE_UNKNOWN;
 
 	intr_status = zynq_fpga_read(priv, INT_STS_OFFSET);
-	clk_disable(priv->clk);
+	pm_runtime_put(priv);
 
 	if (intr_status & IXR_PCFG_DONE_MASK)
 		return FPGA_MGR_STATE_OPERATING;
@@ -457,18 +456,25 @@ static int zynq_fpga_probe(struct platform_device *pdev)
 		return err;
 	}
 
+	pm_runtime_get_noresume(&pdev->dev);
+	pm_runtime_set_active(&pdev->dev);
+	pm_runtime_enable(&pdev->dev);
+
 	/* unlock the device */
 	zynq_fpga_write(priv, UNLOCK_OFFSET, UNLOCK_MASK);
 
-	clk_disable(priv->clk);
 
 	err = fpga_mgr_register(dev, "Xilinx Zynq FPGA Manager",
 				&zynq_fpga_ops, priv);
 	if (err) {
 		dev_err(dev, "unable to register FPGA manager");
-		clk_unprepare(priv->clk);
+		clk_disable_unprepare(priv->clk);
+		pm_runtime_put_noidle(&pdev->dev);
+		pm_runtime_disable(&pdev->dev);
 		return err;
 	}
+
+	pm_runtime_put(&pdev->dev);
 
 	return 0;
 }
@@ -483,10 +489,47 @@ static int zynq_fpga_remove(struct platform_device *pdev)
 
 	fpga_mgr_unregister(&pdev->dev);
 
-	clk_unprepare(priv->clk);
+	pm_runtime_get_sync(&pdev->dev);
+	clk_disable_unprepare(priv->clk);
+	pm_runtime_put_noidle(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
 
 	return 0;
 }
+
+#ifdef CONFIG_PM
+static int zynq_fpga_runtime_suspend(struct device *dev)
+{
+	struct zynq_fpga_priv *priv;
+	struct fpga_manager *mgr;
+
+	mgr = platform_get_drvdata(pdev);
+	priv = mgr->priv;
+
+	clk_disable(priv->clk);
+
+	return 0;
+}
+
+static int zynq_fpga_runtime_resume(struct device *dev)
+{
+	struct zynq_fpga_priv *priv;
+	struct fpga_manager *mgr;
+
+	mgr = platform_get_drvdata(pdev);
+	priv = mgr->priv;
+
+	clk_enable(priv->clk);
+
+	return 0;
+}
+
+#endif
+
+static const struct dev_pm_ops zynq_fpga_pm_ops = {
+	SET_RUNTIME_PM_OPS(zynq_fpga_runtime_suspend,
+			   zynq_fpga_runtime_resume, NULL)
+};
 
 #ifdef CONFIG_OF
 static const struct of_device_id zynq_fpga_of_match[] = {
@@ -503,6 +546,7 @@ static struct platform_driver zynq_fpga_driver = {
 	.driver = {
 		.name = "zynq_fpga_manager",
 		.of_match_table = of_match_ptr(zynq_fpga_of_match),
+		.pm = &zynq_fpga_pm_ops,
 	},
 };
 
