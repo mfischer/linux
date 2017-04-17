@@ -53,6 +53,13 @@
 #define DS1374_REG_SR_AF	0x01 /* Alarm Flag */
 #define DS1374_REG_TCR		0x09 /* Trickle Charge */
 
+#define DS1374_TRICKLE_CHARGER_ENABLE	0xA0
+#define DS1374_TRICKLE_CHARGER_250_OHM	0x01
+#define DS1374_TRICKLE_CHARGER_2K_OHM	0x02
+#define DS1374_TRICKLE_CHARGER_4K_OHM	0x03
+#define DS1374_TRICKLE_CHARGER_NO_DIODE	0x04
+#define DS1374_TRICKLE_CHARGER_DIODE	0x08
+
 static const struct i2c_device_id ds1374_id[] = {
 	{ "ds1374", 0 },
 	{ }
@@ -597,6 +604,49 @@ static struct notifier_block ds1374_wdt_notifier = {
 };
 
 #endif /*CONFIG_RTC_DRV_DS1374_WDT*/
+
+static int ds1374_trickle_of_init(struct i2c_client *client)
+{
+	u32 ohms = 0;
+	u8 value;
+	int ret;
+
+	if (of_property_read_u32(client->dev.of_node, "trickle-resistor-ohms",
+				 &ohms))
+		return 0;
+
+	/* Enable charger */
+	value = DS1374_TRICKLE_CHARGER_ENABLE;
+	if (of_property_read_bool(client->dev.of_node, "trickle-diode-disable"))
+		value |= DS1374_TRICKLE_CHARGER_NO_DIODE;
+	else
+		value |= DS1374_TRICKLE_CHARGER_DIODE;
+
+	/* Resistor select */
+	switch (ohms) {
+	case 250:
+		value |= DS1374_TRICKLE_CHARGER_250_OHM;
+		break;
+	case 2000:
+		value |= DS1374_TRICKLE_CHARGER_2K_OHM;
+		break;
+	case 4000:
+		value |= DS1374_TRICKLE_CHARGER_4K_OHM;
+		break;
+	default:
+		dev_warn(&client->dev,
+			 "Unsupported ohm value %02ux in dt\n", ohms);
+		return -EINVAL;
+	}
+	dev_dbg(&client->dev, "Trickle charge value is 0x%02x\n", value);
+
+	ret = i2c_smbus_write_byte_data(client, DS1374_REG_TCR, value);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
 /*
  *****************************************************************************
  *
@@ -619,6 +669,10 @@ static int ds1374_probe(struct i2c_client *client,
 
 	INIT_WORK(&ds1374->work, ds1374_work);
 	mutex_init(&ds1374->mutex);
+
+	ret = ds1374_trickle_of_init(client);
+	if (ret)
+		return ret;
 
 	ret = ds1374_check_rtc_status(client);
 	if (ret)
