@@ -203,6 +203,16 @@ config MFD_CROS_EC_SPI
 	  response time cannot be guaranteed, we support ignoring
 	  'pre-amble' bytes before the response actually starts.
 
+config MFD_DS1374
+	tristate "Dallas/Maxim DS1374 RTC/WDT/ALARM (I2C)"
+	select MFD_CORE
+	depends on I2C
+	depends on REGMAP_I2C
+
+	 ---help---
+	  This driver supports the Dallas Maxim DS1374 multi function chip.
+	  The chip combines an RTC, trickle charger, Watchdog or Alarm.
+
 config MFD_ASIC3
 	bool "Compaq ASIC3"
 	depends on GPIOLIB && ARM

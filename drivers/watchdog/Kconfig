@@ -120,6 +120,16 @@ config DA9062_WATCHDOG
 
 	  This driver can be built as a module. The module name is da9062_wdt.
 
+config DS1374_WATCHDOG
+	tristate "Maxim/Dallas 1374 Watchdog"
+	depends on MFD_DS1374
+	depends on REGMAP_I2C
+	select WATCHDOG_CORE
+	help
+	  Support for the watchdog in the Maxim/Dallas DS1374 MFD.
+
+	  This driver can be built as a module. The module name is ds1374-wdt.
+
 config GPIO_WATCHDOG
 	tristate "Watchdog device controlled through GPIO-line"
 	depends on OF_GPIO
