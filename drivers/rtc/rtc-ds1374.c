@@ -46,6 +46,7 @@
 #define DS1374_REG_WDALM2	0x06
 #define DS1374_REG_CR		0x07 /* Control */
 #define DS1374_REG_CR_AIE	0x01 /* Alarm Int. Enable */
+#define DS1374_REG_CR_WDSTR	0x08 /* 1=Reset on INT, 0=Rreset on RST */
 #define DS1374_REG_CR_WDALM	0x20 /* 1=Watchdog, 0=Alarm */
 #define DS1374_REG_CR_WACE	0x40 /* WD/Alarm counter enable */
 #define DS1374_REG_SR		0x08 /* Status */
@@ -404,7 +405,7 @@ static int ds1374_wdt_settimeout(unsigned int timeout)
 		goto out;
 
 	/* Disable any existing watchdog/alarm before setting the new one */
-	cr &= ~DS1374_REG_CR_WACE;
+	cr &= ~(DS1374_REG_CR_WACE | DS1374_REG_CR_AIE);
 
 	ret = i2c_smbus_write_byte_data(save_client, DS1374_REG_CR, cr);
 	if (ret < 0)
@@ -418,8 +419,10 @@ static int ds1374_wdt_settimeout(unsigned int timeout)
 	}
 
 	/* Enable watchdog timer */
-	cr |= DS1374_REG_CR_WACE | DS1374_REG_CR_WDALM;
-	cr &= ~DS1374_REG_CR_AIE;
+	cr |= DS1374_REG_CR_WACE | DS1374_REG_CR_WDALM | DS1374_REG_CR_WDSTR |
+		/* WHY?! ?!? ?! */
+		DS1374_REG_CR_AIE;
+	//cr &= ~DS1374_REG_CR_AIE;
 
 	ret = i2c_smbus_write_byte_data(save_client, DS1374_REG_CR, cr);
 	if (ret < 0)
@@ -451,7 +454,7 @@ static void ds1374_wdt_disable(void)
 
 	cr = i2c_smbus_read_byte_data(save_client, DS1374_REG_CR);
 	/* Disable watchdog timer */
-	cr &= ~DS1374_REG_CR_WACE;
+	cr &= ~(DS1374_REG_CR_WACE | DS1374_REG_CR_WDSTR);
 
 	ret = i2c_smbus_write_byte_data(save_client, DS1374_REG_CR, cr);
 }
