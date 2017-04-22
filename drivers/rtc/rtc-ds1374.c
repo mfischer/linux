@@ -29,6 +29,7 @@
 #include <linux/workqueue.h>
 #include <linux/slab.h>
 #include <linux/pm.h>
+#include <linux/regmap.h>
 #ifdef CONFIG_RTC_DRV_DS1374_WDT
 #include <linux/fs.h>
 #include <linux/ioctl.h>
@@ -64,6 +65,43 @@
 #define WDT_MIN_TIMEOUT		1 /* seconds */
 #define WDT_DEFAULT_TIMEOUT	30 /* seconds */
 
+static const struct regmap_range volatile_ranges[] = {
+	regmap_reg_range(DS1374_REG_TOD0, DS1374_REG_WDALM2),
+	regmap_reg_range(DS1374_REG_SR, DS1374_REG_SR),
+};
+
+static const struct regmap_access_table ds1374_volatile_table = {
+	.yes_ranges = volatile_ranges,
+	.n_yes_ranges = ARRAY_SIZE(volatile_ranges),
+};
+
+static const struct regmap_range write_ranges[] = {
+	regmap_reg_range(DS1374_REG_TOD0, DS1374_REG_TCR),
+};
+
+static const struct regmap_access_table ds1374_write_table = {
+	.yes_ranges = write_ranges,
+	.n_yes_ranges = ARRAY_SIZE(write_ranges),
+};
+
+static const struct regmap_range read_ranges[] = {
+	regmap_reg_range(DS1374_REG_TOD0, DS1374_REG_TCR),
+};
+
+static const struct regmap_access_table ds1374_read_table = {
+	.yes_ranges = read_ranges,
+	.n_yes_ranges = ARRAY_SIZE(read_ranges),
+};
+
+static struct regmap_config ds1374_regmap_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
+	.max_register = DS1374_REG_TCR,
+	.wr_table	= &ds1374_write_table,
+	.rd_table	= &ds1374_read_table,
+	.volatile_table	= &ds1374_volatile_table,
+	.cache_type	= REGCACHE_RBTREE,
+};
 
 #ifdef CONFIG_RTC_DRV_DS1374_WDT
 static bool nowayout = WATCHDOG_NOWAYOUT;
@@ -103,6 +141,8 @@ struct ds1374 {
 	struct mutex mutex;
 	int exiting;
 
+	struct regmap *regmap;
+
 #ifdef CONFIG_RTC_DRV_DS1374_WDT
 	struct watchdog_device wdd;
 	u32 rate;
@@ -115,6 +155,7 @@ static struct i2c_driver ds1374_driver;
 static int ds1374_read_rtc(struct i2c_client *client, u32 *time,
 			   int reg, int nbytes)
 {
+	struct ds1374 *ds1374 = i2c_get_clientdata(client);
 	u8 buf[4];
 	int ret;
 	int i;
@@ -122,12 +163,12 @@ static int ds1374_read_rtc(struct i2c_client *client, u32 *time,
 	if (WARN_ON(nbytes > 4))
 		return -EINVAL;
 
-	ret = i2c_smbus_read_i2c_block_data(client, reg, nbytes, buf);
-
-	if (ret < 0)
+	ret = regmap_bulk_read(ds1374->regmap, reg, buf, nbytes);
+	if (ret) {
+		dev_err(&client->dev, "Failed to bulkread n = %d at R%d\n",
+			nbytes, reg);
 		return ret;
-	if (ret < nbytes)
-		return -EIO;
+	}
 
 	for (i = nbytes - 1, *time = 0; i >= 0; i--)
 		*time = (*time << 8) | buf[i];
@@ -138,6 +179,7 @@ static int ds1374_read_rtc(struct i2c_client *client, u32 *time,
 static int ds1374_write_rtc(struct i2c_client *client, u32 time,
 			    int reg, int nbytes)
 {
+	struct ds1374 *ds1374 = i2c_get_clientdata(client);
 	u8 buf[4];
 	int i;
 
@@ -151,25 +193,25 @@ static int ds1374_write_rtc(struct i2c_client *client, u32 time,
 		time >>= 8;
 	}
 
-	return i2c_smbus_write_i2c_block_data(client, reg, nbytes, buf);
+	return regmap_bulk_write(ds1374->regmap, reg, buf, nbytes);
 }
 
-static int ds1374_check_rtc_status(struct i2c_client *client)
+static int ds1374_check_rtc_status(struct ds1374 *ds1374)
 {
 	int ret = 0;
-	int control, stat;
+	unsigned int control, stat;
 
-	stat = i2c_smbus_read_byte_data(client, DS1374_REG_SR);
-	if (stat < 0)
+	ret = regmap_read(ds1374->regmap, DS1374_REG_SR, &stat);
+	if (ret < 0)
 		return stat;
 
 	if (stat & DS1374_REG_SR_OSF)
-		dev_warn(&client->dev,
+		dev_warn(&ds1374->client->dev,
 			 "oscillator discontinuity flagged, time unreliable\n");
 
 	stat &= ~(DS1374_REG_SR_OSF | DS1374_REG_SR_AF);
 
-	ret = i2c_smbus_write_byte_data(client, DS1374_REG_SR, stat);
+	ret = regmap_write(ds1374->regmap, DS1374_REG_SR, stat);
 	if (ret < 0)
 		return ret;
 
@@ -178,12 +220,12 @@ static int ds1374_check_rtc_status(struct i2c_client *client)
 	 * before everything is initialized.
 	 */
 
-	control = i2c_smbus_read_byte_data(client, DS1374_REG_CR);
-	if (control < 0)
+	ret = regmap_read(ds1374->regmap, DS1374_REG_CR, &control);
+	if (ret < 0)
 		return control;
 
 	control &= ~(DS1374_REG_CR_WACE | DS1374_REG_CR_AIE);
-	return i2c_smbus_write_byte_data(client, DS1374_REG_CR, control);
+	return regmap_write(ds1374->regmap, DS1374_REG_CR, control);
 }
 
 static int ds1374_read_time(struct device *dev, struct rtc_time *time)
@@ -218,7 +260,7 @@ static int ds1374_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 	struct i2c_client *client = to_i2c_client(dev);
 	struct ds1374 *ds1374 = i2c_get_clientdata(client);
 	u32 now, cur_alarm;
-	int cr, sr;
+	unsigned int cr, sr;
 	int ret = 0;
 
 	if (client->irq <= 0)
@@ -226,11 +268,11 @@ static int ds1374_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 
 	mutex_lock(&ds1374->mutex);
 
-	cr = ret = i2c_smbus_read_byte_data(client, DS1374_REG_CR);
+	ret = regmap_read(ds1374->regmap, DS1374_REG_CR, &cr);
 	if (ret < 0)
 		goto out;
 
-	sr = ret = i2c_smbus_read_byte_data(client, DS1374_REG_SR);
+	ret = regmap_read(ds1374->regmap, DS1374_REG_SR, &cr);
 	if (ret < 0)
 		goto out;
 
@@ -283,7 +325,7 @@ static int ds1374_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 
 	mutex_lock(&ds1374->mutex);
 
-	ret = cr = i2c_smbus_read_byte_data(client, DS1374_REG_CR);
+	ret = regmap_read(ds1374->regmap, DS1374_REG_CR, &cr);
 	if (ret < 0)
 		goto out;
 
@@ -291,7 +333,7 @@ static int ds1374_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 	 * (or lack thereof). */
 	cr &= ~DS1374_REG_CR_WACE;
 
-	ret = i2c_smbus_write_byte_data(client, DS1374_REG_CR, cr);
+	ret = regmap_write(ds1374->regmap, DS1374_REG_CR, cr);
 	if (ret < 0)
 		goto out;
 
@@ -303,7 +345,7 @@ static int ds1374_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 		cr |= DS1374_REG_CR_WACE | DS1374_REG_CR_AIE;
 		cr &= ~DS1374_REG_CR_WDALM;
 
-		ret = i2c_smbus_write_byte_data(client, DS1374_REG_CR, cr);
+		ret = regmap_write(ds1374->regmap, DS1374_REG_CR, cr);
 	}
 
 out:
@@ -326,24 +368,25 @@ static void ds1374_work(struct work_struct *work)
 {
 	struct ds1374 *ds1374 = container_of(work, struct ds1374, work);
 	struct i2c_client *client = ds1374->client;
-	int stat, control;
+	unsigned int stat, control;
+	int ret;
 
 	mutex_lock(&ds1374->mutex);
 
-	stat = i2c_smbus_read_byte_data(client, DS1374_REG_SR);
-	if (stat < 0)
+	ret = regmap_read(ds1374->regmap, DS1374_REG_SR, &stat);
+	if (ret < 0)
 		goto unlock;
 
 	if (stat & DS1374_REG_SR_AF) {
 		stat &= ~DS1374_REG_SR_AF;
-		i2c_smbus_write_byte_data(client, DS1374_REG_SR, stat);
+		regmap_write(ds1374->regmap, DS1374_REG_SR, stat);
 
-		control = i2c_smbus_read_byte_data(client, DS1374_REG_CR);
-		if (control < 0)
+		ret = regmap_read(ds1374->regmap, DS1374_REG_CR, &control);
+		if (ret < 0)
 			goto out;
 
 		control &= ~(DS1374_REG_CR_WACE | DS1374_REG_CR_AIE);
-		i2c_smbus_write_byte_data(client, DS1374_REG_CR, control);
+		regmap_write(ds1374->regmap, DS1374_REG_CR, control);
 
 		rtc_update_irq(ds1374->rtc, 1, RTC_AF | RTC_IRQF);
 	}
@@ -360,21 +403,22 @@ static int ds1374_alarm_irq_enable(struct device *dev, unsigned int enabled)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct ds1374 *ds1374 = i2c_get_clientdata(client);
+	unsigned int cr;
 	int ret;
 
 	mutex_lock(&ds1374->mutex);
 
-	ret = i2c_smbus_read_byte_data(client, DS1374_REG_CR);
+	ret = regmap_read(ds1374->regmap, DS1374_REG_CR, &cr);
 	if (ret < 0)
 		goto out;
 
 	if (enabled) {
-		ret |= DS1374_REG_CR_WACE | DS1374_REG_CR_AIE;
-		ret &= ~DS1374_REG_CR_WDALM;
+		cr |= DS1374_REG_CR_WACE | DS1374_REG_CR_AIE;
+		cr &= ~DS1374_REG_CR_WDALM;
 	} else {
-		ret &= ~DS1374_REG_CR_WACE;
+		cr &= ~DS1374_REG_CR_WACE;
 	}
-	ret = i2c_smbus_write_byte_data(client, DS1374_REG_CR, ret);
+	ret = regmap_write(ds1374->regmap, DS1374_REG_CR, cr);
 
 out:
 	mutex_unlock(&ds1374->mutex);
@@ -402,13 +446,14 @@ static const struct watchdog_info ds1374_wdt_info = {
 static int ds1374_wdt_stop(struct watchdog_device *wdog)
 {
 	struct ds1374 *ds1374 = watchdog_get_drvdata(wdog);
-	int cr;
+	unsigned int cr;
+	int ret;
 
-	cr = i2c_smbus_read_byte_data(ds1374->client, DS1374_REG_CR);
+	ret = regmap_read(ds1374->regmap, DS1374_REG_CR, &cr);
 	/* Disable watchdog timer */
 	cr &= ~(DS1374_REG_CR_WACE | DS1374_REG_CR_WDSTR);
 
-	return i2c_smbus_write_byte_data(ds1374->client, DS1374_REG_CR, cr);
+	return regmap_write(ds1374->regmap, DS1374_REG_CR, cr);
 }
 
 static int ds1374_wdt_set_timeout(struct watchdog_device *wdog,
@@ -418,14 +463,14 @@ static int ds1374_wdt_set_timeout(struct watchdog_device *wdog,
 	unsigned int timeout = ds1374->rate * t;
 	int cr, err;
 
-	cr  = i2c_smbus_read_byte_data(ds1374->client, DS1374_REG_CR);
-	if (cr < 0)
+	err  = regmap_read(ds1374->regmap, DS1374_REG_CR, &cr);
+	if (err < 0)
 		return 0;
 
 	/* Disable any existing watchdog/alarm before setting the new one */
 	cr &= ~(DS1374_REG_CR_WACE | DS1374_REG_CR_AIE);
 
-	err = i2c_smbus_write_byte_data(ds1374->client, DS1374_REG_CR, cr);
+	err = regmap_write(ds1374->regmap, DS1374_REG_CR, cr);
 	if (err < 0)
 		return err;
 
@@ -441,7 +486,7 @@ static int ds1374_wdt_set_timeout(struct watchdog_device *wdog,
 	if (ds1374->remapped_reset)
 		cr |= DS1374_REG_CR_WDSTR;
 
-	err = i2c_smbus_write_byte_data(ds1374->client, DS1374_REG_CR, cr);
+	err = regmap_write(ds1374->regmap, DS1374_REG_CR, cr);
 	if (err < 0)
 		return err;
 
@@ -495,11 +540,11 @@ static const struct watchdog_ops ds1374_wdt_ops = {
 
 #endif /*CONFIG_RTC_DRV_DS1374_WDT*/
 
-static int ds1374_trickle_of_init(struct i2c_client *client)
+static int ds1374_trickle_of_init(struct ds1374 *ds1374)
 {
 	u32 ohms = 0;
 	u8 value;
-	int ret;
+	struct i2c_client *client = ds1374->client;
 
 	if (of_property_read_u32(client->dev.of_node, "trickle-resistor-ohms",
 				 &ohms))
@@ -530,11 +575,7 @@ static int ds1374_trickle_of_init(struct i2c_client *client)
 	}
 	dev_dbg(&client->dev, "Trickle charge value is 0x%02x\n", value);
 
-	ret = i2c_smbus_write_byte_data(client, DS1374_REG_TCR, value);
-	if (ret < 0)
-		return ret;
-
-	return 0;
+	return regmap_write(ds1374->regmap, DS1374_REG_TCR, value);
 }
 
 /*
@@ -554,17 +595,22 @@ static int ds1374_probe(struct i2c_client *client,
 	if (!ds1374)
 		return -ENOMEM;
 
+	ds1374->regmap = devm_regmap_init_i2c(client,
+					    &ds1374_regmap_config);
+	if (IS_ERR(ds1374->regmap))
+		return PTR_ERR(ds1374->regmap);
+
 	ds1374->client = client;
 	i2c_set_clientdata(client, ds1374);
 
 	INIT_WORK(&ds1374->work, ds1374_work);
 	mutex_init(&ds1374->mutex);
 
-	ret = ds1374_trickle_of_init(client);
+	ret = ds1374_trickle_of_init(ds1374);
 	if (ret)
 		return ret;
 
-	ret = ds1374_check_rtc_status(client);
+	ret = ds1374_check_rtc_status(ds1374);
 	if (ret)
 		return ret;
 
