@@ -1,0 +1,44 @@
+Maxim/Dallas DS1374 Multi Function Device (MFD)
+===============================================
+
+The Maxim/Dallas DS1374 is a multi function device that combines rtc,
+watchdog or alarm, as well as trickle charger.
+
+The DS1374 is connected via I2C.
+
+Required properties:
+- compatible: "ds1374"
+- reg: I2C slave address
+- ds,wd-alm: set to <1> for watchdog, <0> for alarm functionality
+
+Optional properties (WDT):
+- ds,wdt-reset-on-int: When operated in watchdog mode (i.e. WD/ALM#
+  is set to 1) the reset output for the watchdog can be mapped to
+  the INT pin. This is a boolean.
+
+See ../watchdog/* for generic watchdog bindings.
+
+Example for RTC with alarm mode and interrupt:
+
+i2c@12ca0000 {
+	rtc@68 {
+		compatible = "ds1374";
+		reg = <0x68>;
+		interrupts = <&gpio0 62>;
+	};
+};
+
+Example for RTC with watchdog and reset on timeout:
+
+i2c@12ca0000 {
+	rtc@68 {
+		compatible = "ds1374";
+		reg = <0x68>;
+
+		wdt {
+			compatible = "ds1374-wdt";
+			reset-on-timeout;
+			ds,wdt-reset-on-int;
+		};
+	};
+};
