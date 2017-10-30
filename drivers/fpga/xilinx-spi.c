@@ -143,6 +143,11 @@ static const struct fpga_manager_ops xilinx_spi_ops = {
 static int xilinx_spi_probe(struct spi_device *spi)
 {
 	struct xilinx_spi_conf *conf;
+	struct fpga_manager *mgr;
+
+	mgr = devm_kzalloc(&spi->dev, sizeof(*mgr), GFP_KERNEL);
+	if (!mgr)
+		return -ENOMEM;
 
 	conf = devm_kzalloc(&spi->dev, sizeof(*conf), GFP_KERNEL);
 	if (!conf)
@@ -165,13 +170,20 @@ static int xilinx_spi_probe(struct spi_device *spi)
 		return PTR_ERR(conf->done);
 	}
 
-	return fpga_mgr_register(&spi->dev, "Xilinx Slave Serial FPGA Manager",
-				 &xilinx_spi_ops, conf);
+	mgr->parent = &spi->dev;
+	mgr->name = "Xilinx Slave Serial FPGA Manager";
+	mgr->mops = &xilinx_spi_ops;
+	mgr->priv = conf;
+	spi_set_drvdata(spi, mgr);
+
+	return fpga_mgr_register(mgr);
 }
 
 static int xilinx_spi_remove(struct spi_device *spi)
 {
-	fpga_mgr_unregister(&spi->dev);
+	struct fpga_manager *mgr = spi_get_drvdata(spi);
+
+	fpga_mgr_unregister(mgr);
 
 	return 0;
 }

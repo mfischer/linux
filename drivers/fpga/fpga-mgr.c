@@ -516,19 +516,23 @@ EXPORT_SYMBOL_GPL(fpga_mgr_unlock);
 
 /**
  * fpga_mgr_register - register a low level fpga manager driver
- * @dev:	fpga manager device from pdev
- * @name:	fpga manager name
- * @mops:	pointer to structure of fpga manager ops
- * @priv:	fpga manager private data
+ * @mgr:	fpga manager struct
+ *
+ * The following fields of mgr must be set: name, mops, and parent.
  *
  * Return: 0 on success, negative error code otherwise.
  */
-int fpga_mgr_register(struct device *dev, const char *name,
-		      const struct fpga_manager_ops *mops,
-		      void *priv)
+int fpga_mgr_register(struct fpga_manager *mgr)
 {
-	struct fpga_manager *mgr;
+	struct device *dev = mgr->parent;
+	const struct fpga_manager_ops *mops = mgr->mops;
+	const char *name = mgr->name;
 	int id, ret;
+
+	if (!dev) {
+		pr_err("Attempt to register fpga manager without parent\n");
+		return -EINVAL;
+	}
 
 	if (!mops || !mops->write_complete || !mops->state ||
 	    !mops->write_init || (!mops->write && !mops->write_sg) ||
@@ -542,21 +546,12 @@ int fpga_mgr_register(struct device *dev, const char *name,
 		return -EINVAL;
 	}
 
-	mgr = kzalloc(sizeof(*mgr), GFP_KERNEL);
-	if (!mgr)
-		return -ENOMEM;
-
 	id = ida_simple_get(&fpga_mgr_ida, 0, 0, GFP_KERNEL);
 	if (id < 0) {
-		ret = id;
-		goto error_kfree;
+		return id;
 	}
 
 	mutex_init(&mgr->ref_mutex);
-
-	mgr->name = name;
-	mgr->mops = mops;
-	mgr->priv = priv;
 
 	/*
 	 * Initialize framework state by requesting low level driver read state
@@ -571,7 +566,6 @@ int fpga_mgr_register(struct device *dev, const char *name,
 	mgr->dev.parent = dev;
 	mgr->dev.of_node = dev->of_node;
 	mgr->dev.id = id;
-	dev_set_drvdata(dev, mgr);
 
 	ret = dev_set_name(&mgr->dev, "fpga%d", id);
 	if (ret)
@@ -587,8 +581,6 @@ int fpga_mgr_register(struct device *dev, const char *name,
 
 error_device:
 	ida_simple_remove(&fpga_mgr_ida, id);
-error_kfree:
-	kfree(mgr);
 
 	return ret;
 }
@@ -598,10 +590,8 @@ EXPORT_SYMBOL_GPL(fpga_mgr_register);
  * fpga_mgr_unregister - unregister a low level fpga manager driver
  * @dev:	fpga manager device from pdev
  */
-void fpga_mgr_unregister(struct device *dev)
+void fpga_mgr_unregister(struct fpga_manager *mgr)
 {
-	struct fpga_manager *mgr = dev_get_drvdata(dev);
-
 	dev_info(&mgr->dev, "%s %s\n", __func__, mgr->name);
 
 	/*
@@ -620,7 +610,6 @@ static void fpga_mgr_dev_release(struct device *dev)
 	struct fpga_manager *mgr = to_fpga_manager(dev);
 
 	ida_simple_remove(&fpga_mgr_ida, mgr->dev.id);
-	kfree(mgr);
 }
 
 static int __init fpga_mgr_class_init(void)

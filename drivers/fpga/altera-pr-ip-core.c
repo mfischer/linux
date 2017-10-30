@@ -187,7 +187,12 @@ static const struct fpga_manager_ops alt_pr_ops = {
 int alt_pr_register(struct device *dev, void __iomem *reg_base)
 {
 	struct alt_pr_priv *priv;
+	struct fpga_manager *mgr;
 	u32 val;
+
+	mgr = devm_kzalloc(dev, sizeof(*mgr), GFP_KERNEL);
+	if (!mgr)
+		return -ENOMEM;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -201,15 +206,23 @@ int alt_pr_register(struct device *dev, void __iomem *reg_base)
 		(val & ALT_PR_CSR_STATUS_MSK) >> ALT_PR_CSR_STATUS_SFT,
 		(int)(val & ALT_PR_CSR_PR_START));
 
-	return fpga_mgr_register(dev, dev_name(dev), &alt_pr_ops, priv);
+	mgr->parent = dev;
+	mgr->name = dev_name(dev);
+	mgr->mops = &alt_pr_ops;
+	mgr->priv = priv;
+	dev_set_drvdata(dev, mgr);
+
+	return fpga_mgr_register(mgr);
 }
 EXPORT_SYMBOL_GPL(alt_pr_register);
 
 int alt_pr_unregister(struct device *dev)
 {
+	struct fpga_manager *mgr = dev_get_drvdata(dev);
+
 	dev_dbg(dev, "%s\n", __func__);
 
-	fpga_mgr_unregister(dev);
+	fpga_mgr_unregister(mgr);
 
 	return 0;
 }

@@ -138,6 +138,7 @@ struct fpga_manager_ops {
 /**
  * struct fpga_manager - fpga manager structure
  * @name: name of low level fpga manager
+ * @parent: parent device
  * @dev: fpga manager device
  * @ref_mutex: only allows one reference to fpga manager
  * @state: state of fpga manager
@@ -146,6 +147,7 @@ struct fpga_manager_ops {
  */
 struct fpga_manager {
 	const char *name;
+	struct device *parent;
 	struct device dev;
 	struct mutex ref_mutex;
 	enum fpga_mgr_states state;
@@ -170,9 +172,7 @@ struct fpga_manager *fpga_mgr_get(struct device *dev);
 
 void fpga_mgr_put(struct fpga_manager *mgr);
 
-int fpga_mgr_register(struct device *dev, const char *name,
-		      const struct fpga_manager_ops *mops, void *priv);
-
-void fpga_mgr_unregister(struct device *dev);
+int fpga_mgr_register(struct fpga_manager *mgr);
+void fpga_mgr_unregister(struct fpga_manager *mgr);
 
 #endif /*_LINUX_FPGA_MGR_H */

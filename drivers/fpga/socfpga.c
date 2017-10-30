@@ -555,8 +555,13 @@ static int socfpga_fpga_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct socfpga_fpga_priv *priv;
+	struct fpga_manager *mgr;
 	struct resource *res;
 	int ret;
+
+	mgr = devm_kzalloc(dev, sizeof(*mgr), GFP_KERNEL);
+	if (!mgr)
+		return -ENOMEM;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -581,13 +586,20 @@ static int socfpga_fpga_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	return fpga_mgr_register(dev, "Altera SOCFPGA FPGA Manager",
-				 &socfpga_fpga_ops, priv);
+	mgr->parent = dev;
+	mgr->name = "Altera SOCFPGA FPGA Manager";
+	mgr->mops = &socfpga_fpga_ops;
+	mgr->priv = priv;
+	platform_set_drvdata(pdev, mgr);
+
+	return fpga_mgr_register(mgr);
 }
 
 static int socfpga_fpga_remove(struct platform_device *pdev)
 {
-	fpga_mgr_unregister(&pdev->dev);
+	struct fpga_manager *mgr = platform_get_drvdata(pdev);
+
+	fpga_mgr_unregister(mgr);
 
 	return 0;
 }
