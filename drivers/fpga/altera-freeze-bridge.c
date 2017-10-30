@@ -219,6 +219,7 @@ static int altera_freeze_br_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *np = pdev->dev.of_node;
+	struct fpga_bridge *br;
 	void __iomem *base_addr;
 	struct altera_freeze_br_data *priv;
 	struct resource *res;
@@ -226,6 +227,10 @@ static int altera_freeze_br_probe(struct platform_device *pdev)
 
 	if (!np)
 		return -ENODEV;
+
+	br = devm_kzalloc(dev, sizeof(*br), GFP_KERNEL);
+	if (!br)
+		return -ENOMEM;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	base_addr = devm_ioremap_resource(dev, res);
@@ -254,13 +259,20 @@ static int altera_freeze_br_probe(struct platform_device *pdev)
 
 	priv->base_addr = base_addr;
 
-	return fpga_bridge_register(dev, FREEZE_BRIDGE_NAME,
-				    &altera_freeze_br_br_ops, priv);
+	br->parent = dev;
+	br->name = FREEZE_BRIDGE_NAME;
+	br->br_ops = &altera_freeze_br_br_ops;
+	br->priv = priv;
+	platform_set_drvdata(pdev, br);
+
+	return fpga_bridge_register(br);
 }
 
 static int altera_freeze_br_remove(struct platform_device *pdev)
 {
-	fpga_bridge_unregister(&pdev->dev);
+	struct fpga_bridge *br = platform_get_drvdata(pdev);
+
+	fpga_bridge_unregister(br);
 
 	return 0;
 }

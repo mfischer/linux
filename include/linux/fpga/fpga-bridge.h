@@ -26,6 +26,7 @@ struct fpga_bridge_ops {
  * struct fpga_bridge - FPGA bridge structure
  * @name: name of low level FPGA bridge
  * @dev: FPGA bridge device
+ * @parent: parent device
  * @mutex: enforces exclusive reference to bridge
  * @br_ops: pointer to struct of FPGA bridge ops
  * @info: fpga image specific information
@@ -35,6 +36,7 @@ struct fpga_bridge_ops {
 struct fpga_bridge {
 	const char *name;
 	struct device dev;
+	struct device *parent;
 	struct mutex mutex; /* for exclusive reference to bridge */
 	const struct fpga_bridge_ops *br_ops;
 	struct fpga_image_info *info;
@@ -62,8 +64,7 @@ int of_fpga_bridge_get_to_list(struct device_node *np,
 			       struct fpga_image_info *info,
 			       struct list_head *bridge_list);
 
-int fpga_bridge_register(struct device *dev, const char *name,
-			 const struct fpga_bridge_ops *br_ops, void *priv);
-void fpga_bridge_unregister(struct device *dev);
+int fpga_bridge_register(struct fpga_bridge *br);
+void fpga_bridge_unregister(struct fpga_bridge *br);
 
 #endif /* _LINUX_FPGA_BRIDGE_H */

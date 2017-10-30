@@ -139,6 +139,7 @@ static int alt_fpga_bridge_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct altera_hps2fpga_data *priv;
 	const struct of_device_id *of_id;
+	struct fpga_bridge *br;
 	u32 enable;
 	int ret;
 
@@ -149,6 +150,10 @@ static int alt_fpga_bridge_probe(struct platform_device *pdev)
 	}
 
 	priv = (struct altera_hps2fpga_data *)of_id->data;
+
+	br = devm_kzalloc(dev, sizeof(*br), GFP_KERNEL);
+	if (!br)
+		return -ENOMEM;
 
 	priv->bridge_reset = of_reset_control_get_exclusive_by_index(dev->of_node,
 								     0);
@@ -190,8 +195,13 @@ static int alt_fpga_bridge_probe(struct platform_device *pdev)
 		}
 	}
 
-	ret = fpga_bridge_register(dev, priv->name, &altera_hps2fpga_br_ops,
-				   priv);
+	br->parent = dev;
+	br->name = priv->name;
+	br->br_ops = &altera_hps2fpga_br_ops;
+	br->priv = priv;
+	platform_set_drvdata(pdev, br);
+
+	ret = fpga_bridge_register(br);
 err:
 	if (ret)
 		clk_disable_unprepare(priv->clk);
@@ -204,7 +214,7 @@ static int alt_fpga_bridge_remove(struct platform_device *pdev)
 	struct fpga_bridge *bridge = platform_get_drvdata(pdev);
 	struct altera_hps2fpga_data *priv = bridge->priv;
 
-	fpga_bridge_unregister(&pdev->dev);
+	fpga_bridge_unregister(bridge);
 
 	clk_disable_unprepare(priv->clk);
 

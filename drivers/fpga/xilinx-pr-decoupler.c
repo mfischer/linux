@@ -94,8 +94,13 @@ MODULE_DEVICE_TABLE(of, xlnx_pr_decoupler_of_match);
 static int xlnx_pr_decoupler_probe(struct platform_device *pdev)
 {
 	struct xlnx_pr_decoupler_data *priv;
+	struct fpga_bridge *br;
 	int err;
 	struct resource *res;
+
+	br = devm_kzalloc(&pdev->dev, sizeof(*br), GFP_KERNEL);
+	if (!br)
+		return -ENOMEM;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -120,9 +125,13 @@ static int xlnx_pr_decoupler_probe(struct platform_device *pdev)
 
 	clk_disable(priv->clk);
 
-	err = fpga_bridge_register(&pdev->dev, "Xilinx PR Decoupler",
-				   &xlnx_pr_decoupler_br_ops, priv);
+	br->parent = &pdev->dev;
+	br->name = "Xilinx PR Decoupler";
+	br->br_ops = &xlnx_pr_decoupler_br_ops;
+	br->priv = priv;
+	platform_set_drvdata(pdev, br);
 
+	err = fpga_bridge_register(br);
 	if (err) {
 		dev_err(&pdev->dev, "unable to register Xilinx PR Decoupler");
 		clk_unprepare(priv->clk);
@@ -137,7 +146,7 @@ static int xlnx_pr_decoupler_remove(struct platform_device *pdev)
 	struct fpga_bridge *bridge = platform_get_drvdata(pdev);
 	struct xlnx_pr_decoupler_data *p = bridge->priv;
 
-	fpga_bridge_unregister(&pdev->dev);
+	fpga_bridge_unregister(bridge);
 
 	clk_unprepare(p->clk);
 

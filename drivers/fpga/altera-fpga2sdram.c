@@ -106,9 +106,14 @@ static int alt_fpga_bridge_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct alt_fpga2sdram_data *priv;
+	struct fpga_bridge *br;
 	u32 enable;
 	struct regmap *sysmgr;
 	int ret = 0;
+
+	br = devm_kzalloc(dev, sizeof(*br), GFP_KERNEL);
+	if (!br)
+		return -ENOMEM;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -131,8 +136,13 @@ static int alt_fpga_bridge_probe(struct platform_device *pdev)
 	/* Get f2s bridge configuration saved in handoff register */
 	regmap_read(sysmgr, SYSMGR_ISWGRP_HANDOFF3, &priv->mask);
 
-	ret = fpga_bridge_register(dev, F2S_BRIDGE_NAME,
-				   &altera_fpga2sdram_br_ops, priv);
+	br->parent = dev;
+	br->name = F2S_BRIDGE_NAME;
+	br->br_ops = &altera_fpga2sdram_br_ops;
+	br->priv = priv;
+	platform_set_drvdata(pdev, br);
+
+	ret = fpga_bridge_register(br);
 	if (ret)
 		return ret;
 
@@ -146,7 +156,7 @@ static int alt_fpga_bridge_probe(struct platform_device *pdev)
 				 (enable ? "enabling" : "disabling"));
 			ret = _alt_fpga2sdram_enable_set(priv, enable);
 			if (ret) {
-				fpga_bridge_unregister(&pdev->dev);
+				fpga_bridge_unregister(br);
 				return ret;
 			}
 		}
@@ -157,7 +167,9 @@ static int alt_fpga_bridge_probe(struct platform_device *pdev)
 
 static int alt_fpga_bridge_remove(struct platform_device *pdev)
 {
-	fpga_bridge_unregister(&pdev->dev);
+	struct fpga_bridge *br = platform_get_drvdata(pdev);
+
+	fpga_bridge_unregister(br);
 
 	return 0;
 }
