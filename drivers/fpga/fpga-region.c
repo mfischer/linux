@@ -162,9 +162,15 @@ err_put_region:
 }
 EXPORT_SYMBOL_GPL(fpga_region_program_fpga);
 
-int fpga_region_register(struct device *dev, struct fpga_region *region)
+int fpga_region_register(struct fpga_region *region)
 {
+	struct device *dev = region->parent;
 	int id, ret = 0;
+
+	if (!dev) {
+		pr_err("Attempt to register fpga region without parent\n");
+		return -EINVAL;
+	}
 
 	id = ida_simple_get(&fpga_region_ida, 0, 0, GFP_KERNEL);
 	if (id < 0)
